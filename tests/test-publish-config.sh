@@ -109,10 +109,30 @@ if grep -F 'api.github.com/gists' "$call_log" >/dev/null; then
 fi
 
 : >"$call_log"
+direct_log="$workspace/direct-native.log"
+if ! (
+  cd "$root"
+  SUBSCRIPTION_URLS='https://valid.example/sub' \
+  SUBCONVERTER_URL=https://frontend.example \
+  GIST_ID=test GIST_TOKEN=test GITHUB_REPOSITORY=owner/repo GITHUB_SHA=test \
+  bash ./scripts/publish-config.sh
+) >"$direct_log" 2>&1; then
+  printf '%s\n' 'publish unexpectedly rejected a direct native subscription' >&2
+  sed -n '1,160p' "$direct_log" >&2
+  exit 1
+fi
+
+grep -F '订阅直接返回完整 Clash 配置，跳过公共转换器（UA: clash-verge/v2.0）' "$direct_log" >/dev/null
+if grep -F 'frontend-version' "$call_log" >/dev/null || grep -F 'converter-version' "$call_log" >/dev/null; then
+  printf '%s\n' 'publish unexpectedly consulted a converter during direct native fetch' >&2
+  exit 1
+fi
+
+: >"$call_log"
 frontend_log="$workspace/frontend-url.log"
 if (
   cd "$root"
-  SUBSCRIPTION_URLS='https://valid.example/sub' \
+  SUBSCRIPTION_URLS=$'https://valid.example/sub\nhttps://valid-two.example/sub' \
   SUBCONVERTER_URL=https://frontend.example \
   GIST_ID=test GIST_TOKEN=test GITHUB_REPOSITORY=owner/repo GITHUB_SHA=test \
   bash ./scripts/publish-config.sh
