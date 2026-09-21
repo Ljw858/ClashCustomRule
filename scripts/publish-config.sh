@@ -9,7 +9,8 @@ set +x
 : "${SUBSCRIPTION_URLS:?缺少 SUBSCRIPTION_URLS}"
 : "${GIST_ID:?缺少 GIST_ID}"
 : "${GIST_TOKEN:?缺少 GIST_TOKEN}"
-: "${SUBCONVERTER_URL:?缺少 SUBCONVERTER_URL}"
+: "${SUBCONVERTER_URL:=}"
+: "${SUBSCRIPTION_USER_AGENT:=clash-verge/v2.0}"
 : "${GIST_FILENAME:=clash-meta.yaml}"
 : "${GITHUB_REPOSITORY:=chinnsenn/ClashCustomRule}"
 : "${GITHUB_SHA:=master}"
@@ -49,6 +50,18 @@ request_converter() {
     "$subconverter_endpoint" || true
 }
 
+request_subscription() {
+  local output="$1"
+  local subscription_url="$2"
+  curl --silent --show-error --location \
+    --connect-timeout 10 \
+    --max-time 180 \
+    --user-agent "$SUBSCRIPTION_USER_AGENT" \
+    --output "$output" \
+    --write-out '%{http_code}' \
+    "$subscription_url" || true
+}
+
 has_proxies() {
   python3 - "$1" <<'PY'
 import sys
@@ -62,78 +75,110 @@ raise SystemExit(0 if isinstance(data, dict) and data.get("proxies") else 1)
 PY
 }
 
+has_full_config() {
+  python3 - "$1" <<'PY'
+import sys
+from pathlib import Path
+import yaml
+try:
+    data = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, yaml.YAMLError):
+    raise SystemExit(1)
+if not isinstance(data, dict):
+    raise SystemExit(1)
+required = ("proxies", "proxy-groups", "rules")
+raise SystemExit(0 if all(data.get(key) for key in required) else 1)
+PY
+}
+
 printf '%s\n' "$SUBSCRIPTION_URLS" | while IFS= read -r url; do
   [ -z "$url" ] || case "$url" in \#*) ;; *) printf '::add-mask::%s\n' "$url" ;; esac
 done
 printf '::add-mask::%s\n' "$GIST_TOKEN"
-printf '::add-mask::%s\n' "$SUBCONVERTER_URL"
+[ -n "$SUBCONVERTER_URL" ] && printf '::add-mask::%s\n' "$SUBCONVERTER_URL"
 
 mapfile -t subscriptions < <(printf '%s\n' "$SUBSCRIPTION_URLS" | grep -Ev '^\s*(#|$)' || true)
 [ "${#subscriptions[@]}" -gt 0 ] || { printf '%s\n' '没有有效订阅地址' >&2; exit 1; }
 
-case "$SUBCONVERTER_URL" in
-  http://*|https://*) ;;
-  *) printf '%s\n' 'SUBCONVERTER_URL 必须是 http 或 https 地址' >&2; exit 1 ;;
-esac
-subconverter_endpoint="${SUBCONVERTER_URL%/}/sub"
-config_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/config/subconverter.ini"
-
-status="$(curl --silent --show-error --location --connect-timeout 10 --max-time 30 --output "$workspace/version.txt" --write-out '%{http_code}' "${SUBCONVERTER_URL%/}/version" || true)"
-[ "$status" = 200 ] && grep -qi 'subconverter' "$workspace/version.txt" || {
-  printf '%s\n' "公共转换器不是兼容的 subconverter API（HTTP ${status:-000}）" >&2
-  show_converter_diagnostics "$workspace/version.txt"
-  exit 1
-}
-
-successful_subscriptions=0
-failed_conversions=0
-valid_subscriptions=()
-for index in "${!subscriptions[@]}"; do
-  output="$workspace/conversion-$index.yaml"
-  converted=0
-  status=000
-  for attempt in 1 2 3; do
-    status="$(request_converter "$output" \
-      --data-urlencode 'target=clash' \
-      --data-urlencode "url=${subscriptions[$index]}")"
-    if [ "$status" = 200 ] && has_proxies "$output"; then
-      converted=1
-      break
-    fi
-    if [ "$attempt" -lt 3 ]; then
-      printf '%s\n' "订阅 $((index + 1)) 转换未通过，${SUBCONVERTER_RETRY_DELAY} 秒后进行第 $((attempt + 1))/3 次重试" >&2
-      sleep "$SUBCONVERTER_RETRY_DELAY"
-    fi
-  done
-  if [ "$converted" -ne 1 ]; then
-    failed_conversions=$((failed_conversions + 1))
-    printf '%s\n' "订阅 $((index + 1)) 转换失败（HTTP ${status:-000}）" >&2
-    show_converter_diagnostics "$output"
-  else
-    successful_subscriptions=$((successful_subscriptions + 1))
-    valid_subscriptions+=("${subscriptions[$index]}")
+output="$workspace/clash-meta.yaml"
+used_direct_fetch=0
+if [ "${#subscriptions[@]}" -eq 1 ]; then
+  direct_output="$workspace/direct-native.yaml"
+  status="$(request_subscription "$direct_output" "${subscriptions[0]}")"
+  if [ "$status" = 200 ] && has_full_config "$direct_output"; then
+    cp "$direct_output" "$output"
+    used_direct_fetch=1
+    printf '%s\n' "订阅直接返回完整 Clash 配置，跳过公共转换器（UA: ${SUBSCRIPTION_USER_AGENT}）"
   fi
-done
-printf '%s\n' "订阅预检：${successful_subscriptions}/${#subscriptions[@]} 个来源可转换"
-[ "$successful_subscriptions" -gt 0 ] || {
-  printf '%s\n' '没有可转换的订阅，保留现有 Gist，不执行发布' >&2
-  exit 1
-}
-if [ "$failed_conversions" -gt 0 ]; then
-  printf '%s\n' "将跳过 ${failed_conversions} 个转换失败订阅并发布其余来源"
 fi
 
-output="$workspace/clash-meta.yaml"
-joined_urls="$(printf '%s\n' "${valid_subscriptions[@]}" | python3 -c 'import sys; print("|".join(line.strip() for line in sys.stdin if line.strip()))')"
-status="$(request_converter "$output" \
-  --data-urlencode 'target=clash' \
-  --data-urlencode "url=$joined_urls" \
-  --data-urlencode "config=$config_url")"
-[ "$status" = 200 ] || {
-  printf '%s\n' "聚合转换失败（HTTP ${status:-000}）" >&2
-  show_converter_diagnostics "$output"
-  exit 1
-}
+if [ "$used_direct_fetch" -ne 1 ]; then
+  case "$SUBCONVERTER_URL" in
+    http://*|https://*) ;;
+    *)
+      printf '%s\n' 'SUBCONVERTER_URL 缺失或无效；当订阅不能直接返回完整 Clash 配置时必须提供兼容的 subconverter 地址' >&2
+      exit 1
+      ;;
+  esac
+  subconverter_endpoint="${SUBCONVERTER_URL%/}/sub"
+  config_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/config/subconverter.ini"
+
+  status="$(curl --silent --show-error --location --connect-timeout 10 --max-time 30 --output "$workspace/version.txt" --write-out '%{http_code}' "${SUBCONVERTER_URL%/}/version" || true)"
+  [ "$status" = 200 ] && grep -qi 'subconverter' "$workspace/version.txt" || {
+    printf '%s\n' "公共转换器不是兼容的 subconverter API（HTTP ${status:-000}）" >&2
+    show_converter_diagnostics "$workspace/version.txt"
+    exit 1
+  }
+
+  successful_subscriptions=0
+  failed_conversions=0
+  valid_subscriptions=()
+  for index in "${!subscriptions[@]}"; do
+    conversion_output="$workspace/conversion-$index.yaml"
+    converted=0
+    status=000
+    for attempt in 1 2 3; do
+      status="$(request_converter "$conversion_output" \
+        --data-urlencode 'target=clash' \
+        --data-urlencode "url=${subscriptions[$index]}")"
+      if [ "$status" = 200 ] && has_proxies "$conversion_output"; then
+        converted=1
+        break
+      fi
+      if [ "$attempt" -lt 3 ]; then
+        printf '%s\n' "订阅 $((index + 1)) 转换未通过，${SUBCONVERTER_RETRY_DELAY} 秒后进行第 $((attempt + 1))/3 次重试" >&2
+        sleep "$SUBCONVERTER_RETRY_DELAY"
+      fi
+    done
+    if [ "$converted" -ne 1 ]; then
+      failed_conversions=$((failed_conversions + 1))
+      printf '%s\n' "订阅 $((index + 1)) 转换失败（HTTP ${status:-000}）" >&2
+      show_converter_diagnostics "$conversion_output"
+    else
+      successful_subscriptions=$((successful_subscriptions + 1))
+      valid_subscriptions+=("${subscriptions[$index]}")
+    fi
+  done
+  printf '%s\n' "订阅预检：${successful_subscriptions}/${#subscriptions[@]} 个来源可转换"
+  [ "$successful_subscriptions" -gt 0 ] || {
+    printf '%s\n' '没有可转换的订阅，保留现有 Gist，不执行发布' >&2
+    exit 1
+  }
+  if [ "$failed_conversions" -gt 0 ]; then
+    printf '%s\n' "将跳过 ${failed_conversions} 个转换失败订阅并发布其余来源"
+  fi
+
+  joined_urls="$(printf '%s\n' "${valid_subscriptions[@]}" | python3 -c 'import sys; print("|".join(line.strip() for line in sys.stdin if line.strip()))')"
+  status="$(request_converter "$output" \
+    --data-urlencode 'target=clash' \
+    --data-urlencode "url=$joined_urls" \
+    --data-urlencode "config=$config_url")"
+  [ "$status" = 200 ] || {
+    printf '%s\n' "聚合转换失败（HTTP ${status:-000}）" >&2
+    show_converter_diagnostics "$output"
+    exit 1
+  }
+fi
 
 python3 - "$workspace/clash-meta.yaml" <<'PY'
 import sys
