@@ -63,29 +63,31 @@ request_subscription() {
 }
 
 has_proxies() {
-  python3 - "$1" <<'PY'
-import sys
-from pathlib import Path
-import yaml
-try:
-    data = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
-except (OSError, yaml.YAMLError):
-    raise SystemExit(1)
-raise SystemExit(0 if isinstance(data, dict) and data.get("proxies") else 1)
-PY
+  grep -Eq '^[[:space:]]*proxies:[[:space:]]*$' "$1"
 }
 
 has_full_config() {
   python3 - "$1" <<'PY'
 import sys
+import re
 from pathlib import Path
 import yaml
+
+raw = Path(sys.argv[1]).read_bytes()
 try:
-    data = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
-except (OSError, yaml.YAMLError):
-    raise SystemExit(1)
+    text = raw.decode("utf-8")
+except UnicodeDecodeError as error:
+    if error.end == len(raw) and error.reason == "unexpected end of data":
+        text = raw[:error.start].decode("utf-8")
+    else:
+        text = raw.decode("utf-8", errors="ignore")
+try:
+    data = yaml.safe_load(text)
+except yaml.YAMLError:
+    data = None
 if not isinstance(data, dict):
-    raise SystemExit(1)
+    required = ("proxies", "proxy-groups", "rules")
+    raise SystemExit(0 if all(re.search(rf'(?m)^{re.escape(key)}:\s*$', text) for key in required) else 1)
 required = ("proxies", "proxy-groups", "rules")
 raise SystemExit(0 if all(data.get(key) for key in required) else 1)
 PY
@@ -102,12 +104,15 @@ mapfile -t subscriptions < <(printf '%s\n' "$SUBSCRIPTION_URLS" | grep -Ev '^\s*
 
 output="$workspace/clash-meta.yaml"
 used_direct_fetch=0
+successful_subscriptions=0
+failed_conversions=0
 if [ "${#subscriptions[@]}" -eq 1 ]; then
   direct_output="$workspace/direct-native.yaml"
   status="$(request_subscription "$direct_output" "${subscriptions[0]}")"
   if [ "$status" = 200 ] && has_full_config "$direct_output"; then
     cp "$direct_output" "$output"
     used_direct_fetch=1
+    successful_subscriptions=1
     printf '%s\n' "订阅直接返回完整 Clash 配置，跳过公共转换器（UA: ${SUBSCRIPTION_USER_AGENT}）"
   fi
 fi
@@ -130,8 +135,6 @@ if [ "$used_direct_fetch" -ne 1 ]; then
     exit 1
   }
 
-  successful_subscriptions=0
-  failed_conversions=0
   valid_subscriptions=()
   for index in "${!subscriptions[@]}"; do
     conversion_output="$workspace/conversion-$index.yaml"
@@ -168,7 +171,8 @@ if [ "$used_direct_fetch" -ne 1 ]; then
     printf '%s\n' "将跳过 ${failed_conversions} 个转换失败订阅并发布其余来源"
   fi
 
-  joined_urls="$(printf '%s\n' "${valid_subscriptions[@]}" | python3 -c 'import sys; print("|".join(line.strip() for line in sys.stdin if line.strip()))')"
+  joined_urls="$(IFS='|'; printf '%s' "${valid_subscriptions[*]}")"
+  printf '%s\n' '开始聚合可用订阅来源'
   status="$(request_converter "$output" \
     --data-urlencode 'target=clash' \
     --data-urlencode "url=$joined_urls" \
@@ -180,6 +184,7 @@ if [ "$used_direct_fetch" -ne 1 ]; then
   }
 fi
 
+printf '%s\n' '开始校验最终配置'
 python3 - "$workspace/clash-meta.yaml" <<'PY'
 import sys
 from pathlib import Path
@@ -213,6 +218,7 @@ print(f"已验证配置：{len(data['proxies'])} 个节点，{len(data['proxy-gr
 PY
 
 current="$workspace/current.json"
+printf '%s\n' '开始读取当前 Gist 内容'
 status="$(curl --silent --show-error --output "$current" --write-out '%{http_code}' \
   -H "Authorization: Bearer $GIST_TOKEN" \
   -H 'Accept: application/vnd.github+json' \
@@ -237,6 +243,7 @@ if [ "$result" = 10 ]; then
 fi
 [ "$result" = 0 ] || exit "$result"
 
+printf '%s\n' '开始更新 Gist'
 status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
   -X PATCH -H "Authorization: Bearer $GIST_TOKEN" -H 'Accept: application/vnd.github+json' \
   -H 'Content-Type: application/json' --data-binary "@$workspace/request.json" \
