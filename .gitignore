@@ -1,3 +1,14 @@
 .DS_Store
 .venv/
 __pycache__/
+
+subscription-manager-app/node_modules/
+subscription-manager-app/dist/
+subscription-manager-app/.publish-token
+
+subscription-manager-app/.runtime/
+subscription-manager-app/debug.log
+subscription-manager-app/*.js
+!subscription-manager-app/main.js
+!subscription-manager-app/preload.js
+subscription-manager-app/*.bat

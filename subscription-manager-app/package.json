@@ -1,0 +1,48 @@
+{
+  "name": "subscription-manager-app",
+  "version": "1.0.3",
+  "description": "Desktop app for editing subscription URLs and syncing GitHub Actions secrets.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "release": "electron-builder --win -p always"
+  },
+  "build": {
+    "appId": "com.subscription.manager",
+    "directories": {
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Ljw858",
+        "repo": "ClashCustomRule",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "libsodium-wrappers": "^0.7.15"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-packager": "^17.1.2",
+    "sharp": "^0.35.4"
+  },
+  "allowScripts": {
+    "electron@37.10.3": true
+  }
+}
