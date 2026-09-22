@@ -386,7 +386,7 @@ input {
 }
 
 textarea {
-  min-height: 120px;
+  min-height: 80px;
   padding: 10px 12px;
   resize: vertical;
   line-height: 1.7;
@@ -586,7 +586,7 @@ button:disabled {
   color: var(--text-body);
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 600px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
