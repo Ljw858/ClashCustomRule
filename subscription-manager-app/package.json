@@ -1,6 +1,6 @@
 {
   "name": "subscription-manager-app",
-  "version": "1.0.4",
+  "version": "1.0.1",
   "description": "Desktop app for editing subscription URLs and syncing GitHub Actions secrets.",
   "main": "main.js",
   "scripts": {
