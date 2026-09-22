@@ -449,57 +449,52 @@ app.whenReady().then(() => {
   let isManualCheck = false;
   autoUpdater.autoDownload = false;
 
-  autoUpdater.on("update-available", (info) => {
-    dialog.showMessageBox({
-      type: "info",
-      title: "发现新版本",
-      message: `发现新版本 v${info.version}，是否现在下载？`,
-      buttons: ["下载", "以后再说"]
-    }).then(result => {
-      if (result.response === 0) {
-        autoUpdater.downloadUpdate();
-      }
+  function sendUpdaterEvent(event, data) {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      win.webContents.send("updater:event", event, data);
     });
+  }
+
+  autoUpdater.on("checking-for-update", () => {});
+
+  autoUpdater.on("update-available", (info) => {
+    sendUpdaterEvent("available", { version: info.version });
   });
 
   autoUpdater.on("update-not-available", (info) => {
     if (isManualCheck) {
-      dialog.showMessageBox({
-        type: "info",
-        title: "当前是最新版本",
-        message: "您当前使用的已经是最新版本。"
-      });
+      sendUpdaterEvent("not-available", null);
       isManualCheck = false;
     }
   });
 
   autoUpdater.on("error", (err) => {
     if (isManualCheck) {
-      dialog.showMessageBox({
-        type: "error",
-        title: "检查更新出错",
-        message: err.message || err.toString()
-      });
+      sendUpdaterEvent("error", { message: err.message || err.toString() });
       isManualCheck = false;
     }
   });
 
   autoUpdater.on("update-downloaded", (info) => {
-    dialog.showMessageBox({
-      type: "info",
-      title: "更新已下载",
-      message: "新版本已下载完毕，是否重启应用程序进行安装？",
-      buttons: ["重启并安装", "稍后"]
-    }).then(result => {
-      if (result.response === 0) {
-        autoUpdater.quitAndInstall();
-      }
-    });
+    sendUpdaterEvent("downloaded", { version: info.version });
   });
 
-  ipcMain.handle("app:check-update", () => {
+  ipcMain.handle("app:check-update", async () => {
     isManualCheck = true;
-    autoUpdater.checkForUpdates();
+    try {
+      await autoUpdater.checkForUpdates();
+    } catch (err) {
+      sendUpdaterEvent("error", { message: err.message || err.toString() });
+      isManualCheck = false;
+    }
+  });
+
+  ipcMain.handle("app:download-update", () => {
+    autoUpdater.downloadUpdate();
+  });
+
+  ipcMain.handle("app:install-update", () => {
+    autoUpdater.quitAndInstall();
   });
 
   // 启动时静默检查更新

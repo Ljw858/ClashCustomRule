@@ -30,6 +30,39 @@ const resultBadge = document.getElementById("resultBadge");
 const resultTitle = document.getElementById("resultTitle");
 const resultDescription = document.getElementById("resultDescription");
 
+const customModalOverlay = document.getElementById("customModalOverlay");
+const modalTitle = document.getElementById("modalTitle");
+const modalMessage = document.getElementById("modalMessage");
+const modalCancelBtn = document.getElementById("modalCancelBtn");
+const modalConfirmBtn = document.getElementById("modalConfirmBtn");
+
+let currentModalConfirmHandler = null;
+
+function showCustomModal(title, message, confirmText, cancelText, onConfirm) {
+  modalTitle.textContent = title;
+  modalMessage.textContent = message;
+  modalConfirmBtn.textContent = confirmText;
+  modalCancelBtn.textContent = cancelText;
+  
+  if (currentModalConfirmHandler) {
+    modalConfirmBtn.removeEventListener("click", currentModalConfirmHandler);
+  }
+  
+  currentModalConfirmHandler = async () => {
+    closeCustomModal();
+    if (onConfirm) await onConfirm();
+  };
+  
+  modalConfirmBtn.addEventListener("click", currentModalConfirmHandler);
+  customModalOverlay.hidden = false;
+}
+
+function closeCustomModal() {
+  customModalOverlay.hidden = true;
+}
+
+modalCancelBtn.addEventListener("click", closeCustomModal);
+
 const buttons = {
   save: document.getElementById("saveBtn"),
   syncAndRun: document.getElementById("syncAndRunBtn"),
@@ -79,7 +112,7 @@ function setStatus(type, title, message) {
   }
 }
 
-function showToast(type, title, message) {
+function showToast(type, title, message, duration = 3200) {
   const toast = document.createElement("div");
   toast.className = `toast ${type}`;
   toast.innerHTML = `
@@ -91,7 +124,7 @@ function showToast(type, title, message) {
   `;
 
   toastContainer.appendChild(toast);
-  window.setTimeout(() => toast.remove(), 3200);
+  window.setTimeout(() => toast.remove(), duration);
 }
 
 function setBusy(isBusy) {
@@ -215,6 +248,37 @@ async function init() {
   window.subscriptionApp.onWindowStateChange((nextState) => {
     updateMaximizeButton(nextState);
   });
+
+  if (window.subscriptionApp.onUpdaterEvent) {
+    window.subscriptionApp.onUpdaterEvent((event, data) => {
+      switch (event) {
+        case "available":
+          showCustomModal(
+            "发现新版本",
+            `检测到新版本 v${data.version}，是否现在下载更新？`,
+            "下载更新",
+            "稍后",
+            () => window.subscriptionApp.downloadUpdate()
+          );
+          break;
+        case "not-available":
+          showToast("success", "当前是最新版本", "您当前使用的已经是最新版本。", 5000);
+          break;
+        case "error":
+          showToast("error", "更新错误", data.message);
+          break;
+        case "downloaded":
+          showCustomModal(
+            "更新已准备就绪",
+            `新版本 v${data.version} 已经下载完成，是否现在重启并安装？`,
+            "重启并安装",
+            "稍后",
+            () => window.subscriptionApp.installUpdate()
+          );
+          break;
+      }
+    });
+  }
 
   setStatus("idle", "准备就绪", "请选择左侧功能并开始操作。");
 }

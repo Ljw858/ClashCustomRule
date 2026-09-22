@@ -13,9 +13,15 @@ contextBridge.exposeInMainWorld("subscriptionApp", {
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
   checkUpdate: () => ipcRenderer.invoke("app:check-update"),
+  downloadUpdate: () => ipcRenderer.invoke("app:download-update"),
+  installUpdate: () => ipcRenderer.invoke("app:install-update"),
   getWindowState: () => ipcRenderer.invoke("window:get-state"),
   onWindowStateChange: (callback) => {
     ipcRenderer.removeAllListeners("window:state-changed");
     ipcRenderer.on("window:state-changed", (_event, state) => callback(state));
+  },
+  onUpdaterEvent: (callback) => {
+    ipcRenderer.removeAllListeners("updater:event");
+    ipcRenderer.on("updater:event", (_event, ...args) => callback(...args));
   }
 });
