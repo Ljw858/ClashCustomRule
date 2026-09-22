@@ -342,10 +342,10 @@ async function triggerWorkflow(state) {
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 1120,
-    minHeight: 760,
+    width: 900,
+    height: 600,
+    minWidth: 800,
+    minHeight: 500,
     title: "订阅同步助手",
     backgroundColor: "#f3f4f6",
     frame: false,
